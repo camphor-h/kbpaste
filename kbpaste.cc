@@ -75,7 +75,6 @@ std::wstring NormalizeText(const std::wstring& src)
     return result;
 }
 
-// 模拟Shift+Enter（软回车，适用于Monaco/大多数网页编辑器）
 void SimulateShiftEnter(int intervalMs)
 {
     INPUT inputs[4];
