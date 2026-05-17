@@ -37,6 +37,18 @@ int g_nWaitSeconds = 0;
 int g_nIntervalMs = 5;
 bool g_bStopping = false;
 
+// 缩进替换相关
+bool g_bIgnoreIndent = false;
+bool g_bIndentUseSpace = true;
+int g_nIndentCount = 4;
+
+HWND g_hChkIndent = NULL;
+HWND g_hRadioSpace = NULL;
+HWND g_hRadioTab = NULL;
+HWND g_hEditIndentCount = NULL;
+HWND g_hStaticIndentLabel = NULL;
+HWND g_hStaticIndentUnit = NULL;
+
 // 控件ID
 #define IDC_EDIT_TEXT 1001
 #define IDC_WAIT_BOX 1002
@@ -44,6 +56,10 @@ bool g_bStopping = false;
 #define IDC_BTN_APPLY 1004
 #define IDC_STATUS_TEXT 1005
 #define IDC_BTN_STOP 1006
+#define IDC_CHK_INDENT 1007
+#define IDC_RADIO_SPACE 1008
+#define IDC_RADIO_TAB 1009
+#define IDC_EDIT_INDENT_COUNT 1010
 
 // 全局热键ID
 #define HK_PASTE_V 0x0001
@@ -70,6 +86,45 @@ std::wstring NormalizeText(const std::wstring& src)
         } else if (ch >= 0x20) {
             result += ch;
         }
+    }
+
+    return result;
+}
+
+// 读取时忽略缩进：去掉每行前导的匹配缩进
+std::wstring StripIndent(const std::wstring& src)
+{
+    if (!g_bIgnoreIndent) return src;
+
+    std::wstring result;
+    size_t pos = 0;
+    size_t len = src.length();
+
+    while (pos < len) {
+        size_t end = src.find(L'\n', pos);
+        bool lastLine = (end == std::wstring::npos);
+        size_t lineEnd = lastLine ? len : end;
+
+        std::wstring line = src.substr(pos, lineEnd - pos);
+
+        if (g_bIndentUseSpace) {
+            size_t cnt = 0;
+            while (cnt < line.length() && cnt < (size_t)g_nIndentCount && line[cnt] == L' ') {
+                cnt++;
+            }
+            if (cnt == (size_t)g_nIndentCount) {
+                line = line.substr(g_nIndentCount);
+            }
+        } else {
+            if (!line.empty() && line[0] == L'\t') {
+                line = line.substr(1);
+            }
+        }
+
+        result += line;
+
+        if (!lastLine) result += L'\n';
+        pos = lineEnd + 1;
     }
 
     return result;
@@ -214,6 +269,10 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             if (!g_strTextToType.empty()) {
                 // 规范化文本（统一换行符）
                 g_strTextToType = NormalizeText(g_strTextToType);
+                // 读取时忽略缩进
+                if (g_bIgnoreIndent) {
+                    g_strTextToType = StripIndent(g_strTextToType);
+                }
                 g_bStopping = false;
 
                 // 启用停止按钮
@@ -279,6 +338,9 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         if (pKb->vkCode == 'C' && ctrl && alt) {
             std::wstring clipText = GetClipboardText();
             if (!clipText.empty()) {
+                if (g_bIgnoreIndent) {
+                    clipText = StripIndent(clipText);
+                }
                 SetWindowTextW(g_hEdit, clipText.c_str());
                 g_nOutputIndex = 0;
                 UpdateStatus(L"已从剪贴板读取文本");
@@ -342,9 +404,49 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             430, 186, 65, 24,
             hWnd, (HMENU)IDC_BTN_STOP, NULL, NULL);
 
+        g_hChkIndent = CreateWindowW(L"BUTTON", L"忽略缩进",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            10, 230, 140, 20,
+            hWnd, (HMENU)IDC_CHK_INDENT, NULL, NULL);
+
+        g_hStaticIndentLabel = CreateWindowW(L"STATIC", L"缩进：",
+            WS_CHILD | SS_LEFT,
+            30, 254, 85, 18,
+            hWnd, (HMENU)0, NULL, NULL);
+
+        g_hRadioSpace = CreateWindowW(L"BUTTON", L"空格",
+            WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
+            120, 254, 70, 18,
+            hWnd, (HMENU)IDC_RADIO_SPACE, NULL, NULL);
+
+        g_hRadioTab = CreateWindowW(L"BUTTON", L"Tab",
+            WS_CHILD | BS_AUTORADIOBUTTON,
+            195, 254, 60, 18,
+            hWnd, (HMENU)IDC_RADIO_TAB, NULL, NULL);
+
+        g_hEditIndentCount = CreateWindowW(L"EDIT", L"4",
+            WS_CHILD | WS_BORDER | ES_NUMBER,
+            260, 252, 50, 22,
+            hWnd, (HMENU)IDC_EDIT_INDENT_COUNT, NULL, NULL);
+
+        g_hStaticIndentUnit = CreateWindowW(L"STATIC", L"个",
+            WS_CHILD | SS_LEFT,
+            314, 254, 30, 18,
+            hWnd, (HMENU)0, NULL, NULL);
+
+        // 默认选中"空格"
+        SendMessage(g_hRadioSpace, BM_SETCHECK, BST_CHECKED, 0);
+
+        // 初始隐藏缩进策略行
+        ShowWindow(g_hStaticIndentLabel, SW_HIDE);
+        ShowWindow(g_hRadioSpace, SW_HIDE);
+        ShowWindow(g_hRadioTab, SW_HIDE);
+        ShowWindow(g_hEditIndentCount, SW_HIDE);
+        ShowWindow(g_hStaticIndentUnit, SW_HIDE);
+
         g_hStatusText = CreateWindowW(L"STATIC", L"就绪",
             WS_VISIBLE | WS_CHILD | SS_LEFT,
-            10, 240, 480, 22,
+            10, 282, 480, 20,
             hWnd, (HMENU)IDC_STATUS_TEXT, NULL, NULL);
 
         break;
@@ -352,6 +454,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_COMMAND: {
         int cmd = LOWORD(wParam);
+
+        if (cmd == IDC_CHK_INDENT && HIWORD(wParam) == BN_CLICKED) {
+            bool checked = (SendMessage(g_hChkIndent, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            ShowWindow(g_hStaticIndentLabel, checked ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_hRadioSpace, checked ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_hRadioTab, checked ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_hEditIndentCount, checked ? SW_SHOW : SW_HIDE);
+            ShowWindow(g_hStaticIndentUnit, checked ? SW_SHOW : SW_HIDE);
+            return 0;
+        }
 
         if (cmd == IDC_BTN_STOP) {
             g_bStopping = true;
@@ -434,9 +546,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 g_nIntervalMs = newInterval;
             }
 
+            // 读取缩进替换配置
+            g_bIgnoreIndent = (SendMessage(g_hChkIndent, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            if (g_bIgnoreIndent) {
+                g_bIndentUseSpace = (SendMessage(g_hRadioSpace, BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+                wchar_t indentBuf[32];
+                memset(indentBuf, 0, sizeof(indentBuf));
+                GetWindowTextW(g_hEditIndentCount, indentBuf, 32);
+
+                if (indentBuf[0] == L'\0') {
+                    g_nIndentCount = 4;
+                } else {
+                    g_nIndentCount = SafeParseInt(indentBuf, 4, 1, 8);
+                }
+            }
+
             // 更新状态文本
             wchar_t status[128];
-            swprintf(status, L"配置已更新 - 等待%d秒，间隔%d毫秒", g_nWaitSeconds, g_nIntervalMs);
+            swprintf(status, L"配置已更新 - 等待%d秒，间隔%d毫秒%s",
+                g_nWaitSeconds, g_nIntervalMs,
+                g_bIgnoreIndent ? L"，忽略缩进已启用" : L"");
             UpdateStatus(status);
         }
 
@@ -488,7 +618,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
         L"KbPasteWndClass",
         L"键盘模拟粘贴工具",
         WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
-        CW_USEDEFAULT, CW_USEDEFAULT, 510, 310,
+        CW_USEDEFAULT, CW_USEDEFAULT, 510, 320,
         NULL, NULL, hInst, NULL
     );
 
