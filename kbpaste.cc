@@ -130,6 +130,31 @@ std::wstring StripIndent(const std::wstring& src)
     return result;
 }
 
+// 释放所有修饰键，避免触发时残留的 Ctrl/Alt 与模拟按键组合成快捷键
+void ReleaseModifiers()
+{
+    WORD keys[8];
+    INPUT inputs[8];
+    int i = 0;
+
+    keys[0] = VK_LCONTROL;
+    keys[1] = VK_RCONTROL;
+    keys[2] = VK_LMENU;
+    keys[3] = VK_RMENU;
+    keys[4] = VK_LSHIFT;
+    keys[5] = VK_RSHIFT;
+    keys[6] = VK_LWIN;
+    keys[7] = VK_RWIN;
+
+    memset(inputs, 0, sizeof(inputs));
+    for (i = 0; i < 8; i++) {
+        inputs[i].type = INPUT_KEYBOARD;
+        inputs[i].ki.wVk = keys[i];
+        inputs[i].ki.dwFlags = KEYEVENTF_KEYUP;
+    }
+    SendInput(8, inputs, sizeof(INPUT));
+}
+
 void SimulateShiftEnter(int intervalMs)
 {
     INPUT inputs[4];
@@ -254,6 +279,11 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if (nCode >= 0 && wParam == WM_KEYDOWN) {
         KBDLLHOOKSTRUCT* pKb = (KBDLLHOOKSTRUCT*)lParam;
 
+        // 忽略程序自身模拟注入的按键，避免误触发热键
+        if (pKb->flags & LLKHF_INJECTED) {
+            return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
+        }
+
         bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
         bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
@@ -295,6 +325,9 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
                 }
 
                 if (!g_bStopping) {
+                    // 释放触发时残留的修饰键
+                    ReleaseModifiers();
+
                     UpdateStatus(L"正在输出...");
 
                     // 模拟逐字符输出
