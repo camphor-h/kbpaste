@@ -34,8 +34,9 @@ HHOOK g_hKeyboardHook = NULL;
 std::wstring g_strTextToType;
 int g_nOutputIndex = 0;
 int g_nWaitSeconds = 0;
-int g_nIntervalMs = 5;
+int g_nIntervalMs = 0;
 bool g_bStopping = false;
+DWORD g_dwSwallowVk = 0; // 需要吞掉后续事件的触发键
 
 // 缩进替换相关
 bool g_bIgnoreIndent = false;
@@ -276,7 +277,7 @@ void PumpMessages()
 // 键盘钩子回调
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode >= 0 && wParam == WM_KEYDOWN) {
+    if (nCode >= 0) {
         KBDLLHOOKSTRUCT* pKb = (KBDLLHOOKSTRUCT*)lParam;
 
         // 忽略程序自身模拟注入的按键，避免误触发热键
@@ -284,11 +285,24 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
             return CallNextHookEx(g_hKeyboardHook, nCode, wParam, lParam);
         }
 
+        // 吞掉触发键的后续事件（含自动重复），直到物理松开
+        if (g_dwSwallowVk != 0 && pKb->vkCode == g_dwSwallowVk) {
+            if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+                g_dwSwallowVk = 0;
+            }
+            return 1;
+        }
+    }
+
+    if (nCode >= 0 && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+        KBDLLHOOKSTRUCT* pKb = (KBDLLHOOKSTRUCT*)lParam;
+
         bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
         bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 
         // 检测 Ctrl+Alt+V (模拟击键输出)
         if (pKb->vkCode == 'V' && ctrl && alt) {
+            g_dwSwallowVk = pKb->vkCode;
             // 从编辑框获取文本
             wchar_t buf[32768];
             memset(buf, 0, sizeof(buf));
@@ -359,6 +373,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
         // 检测 Ctrl+Alt+G (停止输出)
         if (pKb->vkCode == 'G' && ctrl && alt) {
+            g_dwSwallowVk = pKb->vkCode;
             if (g_bStopping == false) {
                 g_bStopping = true;
                 EnableWindow(g_hBtnStop, FALSE);
@@ -369,6 +384,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
         // 检测 Ctrl+Alt+C (从剪贴板读取到编辑框)
         if (pKb->vkCode == 'C' && ctrl && alt) {
+            g_dwSwallowVk = pKb->vkCode;
             std::wstring clipText = GetClipboardText();
             if (!clipText.empty()) {
                 if (g_bIgnoreIndent) {
@@ -417,7 +433,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             210, 160, 130, 20,
             hWnd, (HMENU)0, NULL, NULL);
 
-        g_hIntervalBox = CreateWindowW(L"EDIT", L"5",
+        g_hIntervalBox = CreateWindowW(L"EDIT", L"0",
             WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER,
             345, 158, 70, 22,
             hWnd, (HMENU)IDC_INTERVAL_BOX, NULL, NULL);
@@ -560,17 +576,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     hasNewInterval = true;
                 } else {
                     UpdateStatus(L"错误：击键间隔必须为纯数字");
-                    return 0;
-                }
-            }
-
-            // 间隔为0时警告
-            if (hasNewInterval && newInterval == 0) {
-                int ret = MessageBoxW(g_hMainWnd,
-                    L"将击键间隔设为0可能会导致程序卡顿，是否继续？",
-                    L"警告",
-                    MB_YESNO | MB_ICONWARNING);
-                if (ret == IDNO) {
                     return 0;
                 }
             }
